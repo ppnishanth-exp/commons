@@ -1,0 +1,89 @@
+name: Org-Wide PR Digest
+
+on:
+  schedule:
+    - cron: "0 15 * * 1-5"   # 3pm UTC weekdays
+  workflow_dispatch:
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout automation repo
+        uses: actions/checkout@v4
+
+      - name: Install GitHub CLI
+        run: sudo apt-get install -y gh jq
+
+      - name: Fetch all repos in org
+        id: repos
+        run: |
+          repos=$(gh repo list ppnishanth-exp --limit 500 --json nameWithOwner --jq '.[].nameWithOwner')
+          echo "repos<<EOF" >> $GITHUB_OUTPUT
+          echo "$repos" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+        env:
+          GH_TOKEN: ${{ secrets.ORG_PAT }}
+
+      - name: Fetch all open PRs across org
+        id: prs
+        run: |
+          all_prs="[]"
+
+          while read repo; do
+            prs=$(gh pr list -R "$repo" --json title,number,url,author --jq '.')
+            all_prs=$(jq -s 'add' <(echo "$all_prs") <(echo "$prs"))
+          done <<< "${{ steps.repos.outputs.repos }}"
+
+          echo "all_prs=$all_prs" >> $GITHUB_OUTPUT
+        env:
+          GH_TOKEN: ${{ secrets.ORG_PAT }}
+
+      - name: Group PRs by author
+        id: grouped
+        run: |
+          prs='${{ steps.prs.outputs.all_prs }}'
+          authors=$(echo "$prs" | jq 'group_by(.author.login) | map({key: .[0].author.login, value: .}) | from_entries')
+          echo "authors=$authors" >> $GITHUB_OUTPUT
+
+      - name: Load Slack ID map
+        id: slackmap
+        run: |
+          map=$(cat .github/slack-map.json)
+          echo "map=$map" >> $GITHUB_OUTPUT
+
+      - name: Send Slack DMs
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+        run: |
+          authors='${{ steps.grouped.outputs.authors }}'
+          slackmap='${{ steps.slackmap.outputs.map }}'
+
+          echo "$authors" | jq -r 'keys[]' | while read author; do
+            slack_id=$(echo "$slackmap" | jq -r --arg a "$author" '.[$a] // empty')
+
+            if [ -z "$slack_id" ]; then
+              echo "No Slack ID for $author, skipping"
+              continue
+            fi
+
+            prs=$(echo "$authors" | jq -r --arg a "$author" '.[$a]')
+            count=$(echo "$prs" | jq 'length')
+
+            if [ "$count" -eq 0 ]; then
+              continue
+            fi
+
+            text="*Your Open PRs Across the Organization*\n"
+
+            echo "$prs" | jq -r '.[] | "- *#\(.number)* \(.title)\n  \(.url)"' >> message.txt
+            text="$text$(cat message.txt)"
+            rm message.txt
+
+            curl -X POST \
+              -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+              -H "Content-type: application/json" \
+              --data "{\"channel\":\"$slack_id\",\"text\":\"$text\"}" \
+              https://slack.com/api/chat.postMessage
+          done

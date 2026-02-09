@@ -55,7 +55,6 @@ jobs:
           echo "🔍 Validating Slack API response..."
 
           ok=$(echo "$slack" | jq -r '.ok // empty')
-
           if [ "$ok" != "true" ]; then
             echo "❌ Slack API returned an error:"
             echo "$slack"
@@ -63,7 +62,6 @@ jobs:
           fi
 
           members_type=$(echo "$slack" | jq -r '.members | type')
-
           if [ "$members_type" != "array" ]; then
             echo "❌ Slack API did not return a valid members array"
             echo "$slack"
@@ -94,22 +92,26 @@ jobs:
             echo "🔍 Resolving Slack ID for GitHub user: $author"
 
             slack_id=$(get_slack_id "$author")
-
             if [ -z "$slack_id" ]; then
               echo "⚠️ No Slack ID found for $author — skipping"
               continue
             fi
 
-            jq -r --arg a "$author" '
+            # SAFE JSON LOOP (fixes invalid date errors)
+            jq -c --arg a "$author" '
               .[$a] // [] |
               map(. + {createdEpoch: ( .createdAt | fromdate )}) |
-              sort_by(.createdEpoch) |
-              .[] |
-              "\(.number) \(.title) \(.url) \(.createdAt)"
+              sort_by(.createdEpoch)
             ' grouped.json \
-            | while read number title url created; do
+            | while read pr; do
+                number=$(echo "$pr" | jq -r '.number')
+                title=$(echo "$pr" | jq -r '.title')
+                url=$(echo "$pr" | jq -r '.url')
+                created=$(echo "$pr" | jq -r '.createdAt')
+
                 created_epoch=$(date -d "$created" +%s)
                 age_days=$(( (now - created_epoch) / 86400 ))
+
                 echo "- *#$number* $title (🕒 ${age_days}d)\n  $url"
               done > message.txt
 

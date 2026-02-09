@@ -78,21 +78,24 @@ jobs:
             grep -i "^$username " slack_cache.txt | awk '{print $2}' | head -n 1
           }
 
-          echo "📦 Normalizing + grouping PRs by author..."
+          echo "📦 Normalizing PRs..."
           echo "$prs" | jq '
-            flatten
-            | map(select(.author != null))
-            | map({
-                number,
-                title,
-                url,
-                createdAt,
-                author: .author.login
-              })
-            | group_by(.author)
+            map(select(.author != null)) |
+            map({
+              number,
+              title,
+              url,
+              createdAt,
+              author: .author.login
+            })
+          ' > normalized.json
+
+          echo "📦 Grouping PRs by author (guaranteed flat)..."
+          jq '
+            group_by(.author)
             | map({key: .[0].author, value: .})
             | from_entries
-          ' > grouped.json
+          ' normalized.json > grouped.json
 
           now=$(date +%s)
 
@@ -105,11 +108,10 @@ jobs:
               continue
             fi
 
-            # SAFE JSON LOOP — guaranteed objects, never arrays
             jq -c --arg a "$author" '
-              .[$a] // [] 
-              | map(. + {createdEpoch: (.createdAt | fromdate)})
-              | sort_by(.createdEpoch)
+              .[$a] |
+              map(. + {createdEpoch: (.createdAt | fromdate)}) |
+              sort_by(.createdEpoch)
             ' grouped.json \
             | while read pr; do
                 number=$(echo "$pr" | jq -r '.number')

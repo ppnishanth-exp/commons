@@ -1,8 +1,8 @@
-name: Org-Wide PR Digest
+name: Org-Wide PR Digest (gh search optimized)
 
 on:
   schedule:
-    - cron: "0 15 * * 1-5"   # 3pm UTC weekdays
+    - cron: "0 16 * * 1-5"   # Every weekday at 9 AM MST
   workflow_dispatch:
 
 jobs:
@@ -10,136 +10,95 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout automation repo
-        uses: actions/checkout@v4
-
-      - name: Install GitHub CLI + jq
+      - name: Install tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y gh jq
+          sudo apt-get install -y jq gh
 
-      - name: Fetch all repos in org
-        id: repos
-        run: |
-          repos=$(gh repo list ppnishanth-exp --limit 500 --json nameWithOwner --jq '.[].nameWithOwner')
-
-          {
-            echo "repos<<EOF"
-            echo "$repos"
-            echo "EOF"
-          } >> $GITHUB_OUTPUT
+      - name: Fetch ALL open PRs across org (1 call via gh search)
+        id: prs
         env:
           GH_TOKEN: ${{ secrets.ORG_PAT }}
-
-      - name: Fetch all open PRs across org
-        id: prs
         run: |
-          all_prs="[]"
-
-          while read repo; do
-            [ -z "$repo" ] && continue
-            prs=$(gh pr list -R "$repo" --json title,number,url,author --jq '.')
-            all_prs=$(jq -s 'add' <(echo "$all_prs") <(echo "$prs"))
-          done <<< "${{ steps.repos.outputs.repos }}"
+          prs=$(gh search prs \
+            --owner ORG_NAME \
+            --state open \
+            --json number,title,url,author,createdAt)
 
           {
             echo "all_prs<<EOF"
-            echo "$all_prs"
+            echo "$prs"
             echo "EOF"
-          } >> $GITHUB_OUTPUT
-        env:
-          GH_TOKEN: ${{ secrets.ORG_PAT }}
+          } >> "$GITHUB_OUTPUT"
 
-      - name: Group PRs by author
-        id: grouped
+      - name: Fetch ALL Slack users (1 call)
+        id: slack
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+        run: |
+          slack_users=$(curl -s -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+            https://slack.com/api/users.list)
+
+          {
+            echo "slack_users<<EOF"
+            echo "$slack_users"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Process + Send Slack DMs (local processing only)
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
         run: |
           prs='${{ steps.prs.outputs.all_prs }}'
+          slack='${{ steps.slack.outputs.slack_users }}'
 
-          authors=$(echo "$prs" | jq '
+          echo "📥 Building Slack user cache..."
+          echo "$slack" | jq -r '.members[] | "\(.name) \(.id)"' > slack_cache.txt
+          echo "$slack" | jq -r '.members[] | "\(.profile.display_name) \(.id)"' >> slack_cache.txt
+          echo "$slack" | jq -r '.members[] | "\(.profile.real_name) \(.id)"' >> slack_cache.txt
+
+          get_slack_id() {
+            local username="$1"
+            grep -i "^$username " slack_cache.txt | awk '{print $2}' | head -n 1
+          }
+
+          echo "📦 Grouping PRs by author..."
+          echo "$prs" | jq '
             group_by(.author.login)
             | map({key: .[0].author.login, value: .})
             | from_entries
-          ')
+          ' > grouped.json
 
-          {
-            echo "authors<<EOF"
-            echo "$authors"
-            echo "EOF"
-          } >> $GITHUB_OUTPUT
+          now=$(date +%s)
 
-      - name: Load Slack ID map
-        id: slackmap
-        run: |
-          map=$(cat .github/slack-map.json)
+          for author in $(jq -r 'keys[]' grouped.json); do
+            echo "🔍 Resolving Slack ID for GitHub user: $author"
 
-          {
-            echo "map<<EOF"
-            echo "$map"
-            echo "EOF"
-          } >> $GITHUB_OUTPUT
-
-      - name: Validate Slack IDs
-        env:
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-        run: |
-          slackmap='${{ steps.slackmap.outputs.map }}'
-
-          echo "🔍 Validating Slack IDs..."
-
-          echo "$slackmap" | jq -r 'to_entries[] | "\(.key) \(.value)"' | while read gh_user slack_id; do
-            echo "Testing GitHub user: $gh_user → Slack ID: $slack_id"
-
-            result=$(curl -s -X POST \
-              -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
-              -H "Content-type: application/json" \
-              --data "{\"channel\":\"$slack_id\",\"text\":\"Slack ID validation test\"}" \
-              https://slack.com/api/chat.postMessage)
-
-            echo "Slack API response: $result"
-
-            ok=$(echo "$result" | jq -r '.ok')
-
-            if [ "$ok" != "true" ]; then
-              echo "❌ Validation FAILED for $gh_user ($slack_id)"
-            else
-              echo "✅ Validation PASSED for $gh_user ($slack_id)"
-            fi
-
-            echo
-          done
-
-
-      - name: Send Slack DMs
-        env:
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-        run: |
-          authors='${{ steps.grouped.outputs.authors }}'
-          slackmap='${{ steps.slackmap.outputs.map }}'
-
-          echo "$authors" | jq -r 'keys[]' | while read author; do
-            slack_id=$(echo "$slackmap" | jq -r --arg a "$author" '.[$a] // empty')
-
-            echo "Author: $author → Slack ID: $slack_id"
+            slack_id=$(get_slack_id "$author")
 
             if [ -z "$slack_id" ]; then
-              echo "No Slack ID for $author, skipping"
+              echo "⚠️ No Slack ID found for $author — skipping"
               continue
             fi
 
-            prs=$(echo "$authors" | jq -r --arg a "$author" '.[$a]')
-            count=$(echo "$prs" | jq 'length')
+            jq -r --arg a "$author" '
+              .[$a]
+              | map(. + {createdEpoch: ( .createdAt | fromdate )})
+              | sort_by(.createdEpoch)
+              | .[]
+              | "\(.number) \(.title) \(.url) \(.createdAt)"
+            ' grouped.json \
+            | while read number title url created; do
+                created_epoch=$(date -d "$created" +%s)
+                age_days=$(( (now - created_epoch) / 86400 ))
+                echo "- *#$number* $title (🕒 ${age_days}d)\n  $url"
+              done > message.txt
 
-            if [ "$count" -eq 0 ]; then
-              continue
-            fi
+            text="*Your Open PRs Across the Organization*\n$(cat message.txt)"
 
-            text="*Your Open PRs Across the Organization*\n"
+            echo "📨 Sending DM to $author ($slack_id)"
 
-            echo "$prs" | jq -r '.[] | "- *#\(.number)* \(.title)\n  \(.url)"' > message.txt
-            text="$text$(cat message.txt)"
-            rm message.txt
-
-            curl -X POST \
+            curl -s -X POST \
               -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
               -H "Content-type: application/json" \
               --data "{\"channel\":\"$slack_id\",\"text\":\"$text\"}" \

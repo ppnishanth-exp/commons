@@ -99,6 +99,8 @@ jobs:
 
           cat grouped.json | jq .
 
+          echo "🔍 grouped.json: $grouped.json"
+
           now=$(date +%s)
 
           for author in $(jq -r 'keys[]' grouped.json); do

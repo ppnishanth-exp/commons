@@ -21,7 +21,7 @@ jobs:
           GH_TOKEN: ${{ secrets.ORG_PAT }}
         run: |
           prs=$(gh search prs \
-            --owner ORG_NAME \
+            --owner ppnishanth-exp \
             --state open \
             --json number,title,url,author,createdAt)
 

@@ -88,6 +88,8 @@ jobs:
           echo "$authors" | jq -r 'keys[]' | while read author; do
             slack_id=$(echo "$slackmap" | jq -r --arg a "$author" '.[$a] // empty')
 
+            echo "Author: $author → Slack ID: $slack_id"
+
             if [ -z "$slack_id" ]; then
               echo "No Slack ID for $author, skipping"
               continue

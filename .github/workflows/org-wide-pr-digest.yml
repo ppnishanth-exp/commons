@@ -78,6 +78,37 @@ jobs:
             echo "EOF"
           } >> $GITHUB_OUTPUT
 
+      - name: Validate Slack IDs
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+        run: |
+          slackmap='${{ steps.slackmap.outputs.map }}'
+
+          echo "🔍 Validating Slack IDs..."
+
+          echo "$slackmap" | jq -r 'to_entries[] | "\(.key) \(.value)"' | while read gh_user slack_id; do
+            echo "Testing GitHub user: $gh_user → Slack ID: $slack_id"
+
+            result=$(curl -s -X POST \
+              -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+              -H "Content-type: application/json" \
+              --data "{\"channel\":\"$slack_id\",\"text\":\"Slack ID validation test\"}" \
+              https://slack.com/api/chat.postMessage)
+
+            echo "Slack API response: $result"
+
+            ok=$(echo "$result" | jq -r '.ok')
+
+            if [ "$ok" != "true" ]; then
+              echo "❌ Validation FAILED for $gh_user ($slack_id)"
+            else
+              echo "✅ Validation PASSED for $gh_user ($slack_id)"
+            fi
+
+            echo
+          done
+
+
       - name: Send Slack DMs
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}

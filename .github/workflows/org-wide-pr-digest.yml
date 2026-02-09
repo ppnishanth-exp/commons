@@ -21,7 +21,7 @@ jobs:
           GH_TOKEN: ${{ secrets.ORG_PAT }}
         run: |
           prs=$(gh search prs \
-            --owner ppnishanth-exp \
+            --owner ORG_NAME \
             --state open \
             --json number,title,url,author,createdAt)
 
@@ -90,16 +90,12 @@ jobs:
             })
           ' > normalized.json
 
-          echo "📦 Grouping PRs by author (guaranteed flat)..."
+          echo "📦 Grouping PRs by author..."
           jq '
             group_by(.author)
             | map({key: .[0].author, value: .})
             | from_entries
           ' normalized.json > grouped.json
-
-          cat grouped.json | jq .
-
-          echo "🔍 grouped.json: $grouped.json"
 
           now=$(date +%s)
 
@@ -117,7 +113,7 @@ jobs:
               map(. + {createdEpoch: (.createdAt | fromdate)}) |
               sort_by(.createdEpoch)
             ' grouped.json \
-            | while read pr; do
+            | while IFS= read -r pr; do
                 number=$(echo "$pr" | jq -r '.number')
                 title=$(echo "$pr" | jq -r '.title')
                 url=$(echo "$pr" | jq -r '.url')

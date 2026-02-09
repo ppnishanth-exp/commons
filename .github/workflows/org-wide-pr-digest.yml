@@ -114,10 +114,10 @@ jobs:
               sort_by(.createdEpoch)
             ' grouped.json \
             | while IFS= read -r pr; do
-                number=$(echo "$pr" | jq -r '.number')
-                title=$(echo "$pr" | jq -r '.title')
-                url=$(echo "$pr" | jq -r '.url')
-                created=$(echo "$pr" | jq -r '.createdAt')
+                number=$(echo "$pr" | jq -r '[].number')
+                title=$(echo "$pr" | jq -r '[].title')
+                url=$(echo "$pr" | jq -r '[].url')
+                created=$(echo "$pr" | jq -r '[].createdAt')
 
                 created_epoch=$(date -d "$created" +%s)
                 age_days=$(( (now - created_epoch) / 86400 ))

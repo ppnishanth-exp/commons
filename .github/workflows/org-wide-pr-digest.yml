@@ -78,12 +78,12 @@ jobs:
             grep -i "^$username " slack_cache.txt | awk '{print $2}' | head -n 1
           }
 
-          echo "📦 Grouping PRs by author (null-safe + flatten)..."
+          echo "📦 Grouping PRs by author (correct + flatten)..."
           echo "$prs" | jq '
             flatten |
             map(select(.author != null)) |
             group_by(.author.login) |
-            map({key: .[0].author.login, value: .}) |
+            map({key: .[0].author.login, value: (.[ ] )}) |
             from_entries
           ' > grouped.json
 
@@ -98,7 +98,7 @@ jobs:
               continue
             fi
 
-            # SAFE JSON LOOP (fixes invalid date + array indexing errors)
+            # SAFE JSON LOOP (guaranteed object, never array)
             jq -c --arg a "$author" '
               .[$a] // [] |
               flatten |

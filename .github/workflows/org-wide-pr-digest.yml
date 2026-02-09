@@ -1,4 +1,4 @@
-name: Org-Wide PR Digest
+name: Org-Wide PR Digest (gh search optimized)
 
 on:
   schedule:
@@ -21,7 +21,7 @@ jobs:
           GH_TOKEN: ${{ secrets.ORG_PAT }}
         run: |
           prs=$(gh search prs \
-            --owner ppnishanth-exp \
+            --owner ORG_NAME \
             --state open \
             --json number,title,url,author,createdAt)
 
@@ -51,6 +51,24 @@ jobs:
         run: |
           prs='${{ steps.prs.outputs.all_prs }}'
           slack='${{ steps.slack.outputs.slack_users }}'
+
+          echo "🔍 Validating Slack API response..."
+
+          ok=$(echo "$slack" | jq -r '.ok // empty')
+
+          if [ "$ok" != "true" ]; then
+            echo "❌ Slack API returned an error:"
+            echo "$slack"
+            exit 1
+          fi
+
+          members_type=$(echo "$slack" | jq -r '.members | type')
+
+          if [ "$members_type" != "array" ]; then
+            echo "❌ Slack API did not return a valid members array"
+            echo "$slack"
+            exit 1
+          fi
 
           echo "📥 Building Slack user cache..."
           echo "$slack" | jq -r '.members[] | "\(.name) \(.id)"' > slack_cache.txt

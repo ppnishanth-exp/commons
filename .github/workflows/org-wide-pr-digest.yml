@@ -1,4 +1,4 @@
-name: Org-Wide PR Digest (gh search optimized)
+name: Org-Wide PR Digest
 
 on:
   schedule:
@@ -21,7 +21,7 @@ jobs:
           GH_TOKEN: ${{ secrets.ORG_PAT }}
         run: |
           prs=$(gh search prs \
-            --owner ppnishanth-exp \
+            --owner ORG_NAME \
             --state open \
             --json number,title,url,author,createdAt)
 
@@ -62,11 +62,12 @@ jobs:
             grep -i "^$username " slack_cache.txt | awk '{print $2}' | head -n 1
           }
 
-          echo "📦 Grouping PRs by author..."
+          echo "📦 Grouping PRs by author (null-safe)..."
           echo "$prs" | jq '
-            group_by(.author.login)
-            | map({key: .[0].author.login, value: .})
-            | from_entries
+            map(select(.author != null)) |
+            group_by(.author.login) |
+            map({key: .[0].author.login, value: .}) |
+            from_entries
           ' > grouped.json
 
           now=$(date +%s)
@@ -82,11 +83,11 @@ jobs:
             fi
 
             jq -r --arg a "$author" '
-              .[$a]
-              | map(. + {createdEpoch: ( .createdAt | fromdate )})
-              | sort_by(.createdEpoch)
-              | .[]
-              | "\(.number) \(.title) \(.url) \(.createdAt)"
+              .[$a] // [] |
+              map(. + {createdEpoch: ( .createdAt | fromdate )}) |
+              sort_by(.createdEpoch) |
+              .[] |
+              "\(.number) \(.title) \(.url) \(.createdAt)"
             ' grouped.json \
             | while read number title url created; do
                 created_epoch=$(date -d "$created" +%s)

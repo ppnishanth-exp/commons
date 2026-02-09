@@ -97,6 +97,8 @@ jobs:
             | from_entries
           ' normalized.json > grouped.json
 
+          cat grouped.json | jq .
+
           now=$(date +%s)
 
           for author in $(jq -r 'keys[]' grouped.json); do

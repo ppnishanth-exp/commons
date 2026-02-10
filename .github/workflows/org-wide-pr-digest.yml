@@ -76,6 +76,13 @@ jobs:
             | map({key: .[0].author, value: .})
             | from_entries
           ' normalized.json > grouped.json
+          
+          echo "===== grouped.json (raw) ====="
+          cat grouped.json
+          echo
+          echo "===== grouped.json (pretty) ====="
+          cat grouped.json | jq .
+
 
           now=$(date +%s)
 

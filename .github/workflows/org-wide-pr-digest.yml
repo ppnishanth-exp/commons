@@ -45,7 +45,7 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Process + Send Slack DMs
+      - name: Process + Send Slack DMs (Workaround #2)
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
         run: |
@@ -61,24 +61,13 @@ jobs:
             grep -i "^$1 " slack_cache.txt | awk '{print $2}' | head -n 1
           }
 
-          echo "📦 Normalizing PRs..."
+          echo "📦 Grouping PRs by author (raw GitHub data)..."
           echo "$prs" | jq '
             map(select(.author != null)) |
-            map({
-              number,
-              title,
-              url,
-              createdAt,
-              author: .author.login
-            })
-          ' > normalized.json
-
-          echo "📦 Grouping PRs by author..."
-          jq '
-            group_by(.author)
-            | map({key: .[0].author, value: .})
-            | from_entries
-          ' normalized.json > grouped.json
+            group_by(.author.login) |
+            map({key: .[0].author.login, value: .}) |
+            from_entries
+          ' > grouped.json
 
           now=$(date +%s)
 
@@ -88,17 +77,17 @@ jobs:
             slack_id=$(get_slack_id "$author")
             [ -z "$slack_id" ] && continue
 
-            # Workaround #1: Output pipe-delimited fields instead of JSON
-            jq -r --arg a "$author" '
-              .[$a][] |
-              "\(.number)|\(.title)|\(.url)|\(.createdAt)"
-            ' grouped.json \
-            | while IFS='|' read number title url created; do
-                created_epoch=$(date -d "$created" +%s)
-                age_days=$(( (now - created_epoch) / 86400 ))
-
-                echo "- *#$number* $title (${age_days}d)\n  $url"
-              done > message.txt
+            # Workaround #2: jq builds the entire Slack message
+            jq -r --arg a "$author" --argjson now "$now" '
+              .[$a]
+              | sort_by(.createdAt)
+              | map(
+                  "- *#\(.number)* \(.title) (" +
+                  (((($now - (.createdAt | fromdate)) / 86400) | floor) | tostring) +
+                  "d)\n  \(.url)"
+                )
+              | join("\n")
+            ' grouped.json > message.txt
 
             text="*Your Open PRs Across the Organization*\n$(cat message.txt)"
 

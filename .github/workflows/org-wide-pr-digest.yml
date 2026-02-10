@@ -21,7 +21,7 @@ jobs:
           GH_TOKEN: ${{ secrets.ORG_PAT }}
         run: |
           prs=$(gh search prs \
-            --owner ppnishanth-exp \
+            --owner ORG_NAME \
             --state open \
             --json number,title,url,author,createdAt)
 
@@ -45,40 +45,21 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Process + Send Slack DMs (local processing only)
+      - name: Process + Send Slack DMs
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
         run: |
           prs='${{ steps.prs.outputs.all_prs }}'
           slack='${{ steps.slack.outputs.slack_users }}'
 
-          echo "🔍 Validating Slack API response..."
-
-          ok=$(echo "$slack" | jq -r '.ok // empty')
-          if [ "$ok" != "true" ]; then
-            echo "❌ Slack API returned an error:"
-            echo "$slack"
-            exit 1
-          fi
-
-          members_type=$(echo "$slack" | jq -r '.members | type')
-          if [ "$members_type" != "array" ]; then
-            echo "❌ Slack API did not return a valid members array"
-            echo "$slack"
-            exit 1
-          fi
-
-          echo "📥 Building Slack user cache..."
           echo "$slack" | jq -r '.members[] | "\(.name) \(.id)"' > slack_cache.txt
           echo "$slack" | jq -r '.members[] | "\(.profile.display_name) \(.id)"' >> slack_cache.txt
           echo "$slack" | jq -r '.members[] | "\(.profile.real_name) \(.id)"' >> slack_cache.txt
 
           get_slack_id() {
-            local username="$1"
-            grep -i "^$username " slack_cache.txt | awk '{print $2}' | head -n 1
+            grep -i "^$1 " slack_cache.txt | awk '{print $2}' | head -n 1
           }
 
-          echo "📦 Normalizing PRs..."
           echo "$prs" | jq '
             map(select(.author != null)) |
             map({
@@ -90,7 +71,6 @@ jobs:
             })
           ' > normalized.json
 
-          echo "📦 Grouping PRs by author..."
           jq '
             group_by(.author)
             | map({key: .[0].author, value: .})
@@ -100,34 +80,26 @@ jobs:
           now=$(date +%s)
 
           for author in $(jq -r 'keys[]' grouped.json); do
-            echo "🔍 Resolving Slack ID for GitHub user: $author"
-
             slack_id=$(get_slack_id "$author")
-            if [ -z "$slack_id" ]; then
-              echo "⚠️ No Slack ID found for $author — skipping"
-              continue
-            fi
+            [ -z "$slack_id" ] && continue
 
             jq -c --arg a "$author" '
               .[$a] |
-              map(. + {createdEpoch: (.createdAt | fromdate)}) |
-              sort_by(.createdEpoch)
+              sort_by(.createdAt)
             ' grouped.json \
             | while IFS= read -r pr; do
-                number=$(echo "$pr" | jq -r '[].number')
-                title=$(echo "$pr" | jq -r '[].title')
-                url=$(echo "$pr" | jq -r '[].url')
-                created=$(echo "$pr" | jq -r '[].createdAt')
+                number=$(jq -r '.number' <<< "$pr")
+                title=$(jq -r '.title' <<< "$pr")
+                url=$(jq -r '.url' <<< "$pr")
+                created=$(jq -r '.createdAt' <<< "$pr")
 
                 created_epoch=$(date -d "$created" +%s)
                 age_days=$(( (now - created_epoch) / 86400 ))
 
-                echo "- *#$number* $title (🕒 ${age_days}d)\n  $url"
+                echo "- *#$number* $title (${age_days}d)\n  $url"
               done > message.txt
 
             text="*Your Open PRs Across the Organization*\n$(cat message.txt)"
-
-            echo "📨 Sending DM to $author ($slack_id)"
 
             curl -s -X POST \
               -H "Authorization: Bearer $SLACK_BOT_TOKEN" \

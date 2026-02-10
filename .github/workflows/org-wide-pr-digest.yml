@@ -21,7 +21,7 @@ jobs:
           GH_TOKEN: ${{ secrets.ORG_PAT }}
         run: |
           prs=$(gh search prs \
-            --owner ppnishanth-exp \
+            --owner ORG_NAME \
             --state open \
             --json number,title,url,author,createdAt)
 
@@ -52,6 +52,7 @@ jobs:
           prs='${{ steps.prs.outputs.all_prs }}'
           slack='${{ steps.slack.outputs.slack_users }}'
 
+          echo "📥 Building Slack user cache..."
           echo "$slack" | jq -r '.members[] | "\(.name) \(.id)"' > slack_cache.txt
           echo "$slack" | jq -r '.members[] | "\(.profile.display_name) \(.id)"' >> slack_cache.txt
           echo "$slack" | jq -r '.members[] | "\(.profile.real_name) \(.id)"' >> slack_cache.txt
@@ -60,6 +61,7 @@ jobs:
             grep -i "^$1 " slack_cache.txt | awk '{print $2}' | head -n 1
           }
 
+          echo "📦 Normalizing PRs..."
           echo "$prs" | jq '
             map(select(.author != null)) |
             map({
@@ -71,35 +73,27 @@ jobs:
             })
           ' > normalized.json
 
+          echo "📦 Grouping PRs by author..."
           jq '
             group_by(.author)
             | map({key: .[0].author, value: .})
             | from_entries
           ' normalized.json > grouped.json
-          
-          echo "===== grouped.json (raw) ====="
-          cat grouped.json
-          echo
-          echo "===== grouped.json (pretty) ====="
-          cat grouped.json | jq .
-
 
           now=$(date +%s)
 
           for author in $(jq -r 'keys[]' grouped.json); do
+            echo "🔍 Processing author: $author"
+
             slack_id=$(get_slack_id "$author")
             [ -z "$slack_id" ] && continue
 
-            jq -c --arg a "$author" '
-              .[$a] |
-              sort_by(.createdAt)
+            # Workaround #1: Output pipe-delimited fields instead of JSON
+            jq -r --arg a "$author" '
+              .[$a][] |
+              "\(.number)|\(.title)|\(.url)|\(.createdAt)"
             ' grouped.json \
-            | while IFS= read -r pr; do
-                number=$(jq -r '.number' <<< "$pr")
-                title=$(jq -r '.title' <<< "$pr")
-                url=$(jq -r '.url' <<< "$pr")
-                created=$(jq -r '.createdAt' <<< "$pr")
-
+            | while IFS='|' read number title url created; do
                 created_epoch=$(date -d "$created" +%s)
                 age_days=$(( (now - created_epoch) / 86400 ))
 
@@ -108,6 +102,7 @@ jobs:
 
             text="*Your Open PRs Across the Organization*\n$(cat message.txt)"
 
+            echo "📨 Sending DM to $author ($slack_id)"
             curl -s -X POST \
               -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
               -H "Content-type: application/json" \

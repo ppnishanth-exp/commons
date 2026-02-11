@@ -15,7 +15,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y jq gh
 
-      - name: Fetch ALL open PRs across org (1 call via gh search)
+      - name: Fetch ALL open PRs across org
         id: prs
         env:
           GH_TOKEN: ${{ secrets.ORG_PAT }}
@@ -31,26 +31,34 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Build Slack message for channel
+      - name: Build Slack message grouped by author
         id: build
         run: |
           prs='${{ steps.prs.outputs.all_prs }}'
 
-          # Build a single Slack message summarizing all PRs
           jq -r '
             if length == 0 then
               "No open PRs across the organization."
             else
-              map(
-                "- *#\(.number)* \(.title)\n  \(.url)"
-              )
-              | join("\n")
+              group_by(.author.login)
+              | sort_by(.[0].author.login)
+              | map(
+                  "*Author: @\([0].author.login)*\n"
+                  +
+                  (
+                    map(
+                      "- *#\(.number)* \(.title)\n  \(.url)"
+                    )
+                    | join("\n")
+                  )
+                )
+              | join("\n\n")
             end
           ' <<< "$prs" > message.txt
 
           {
             echo "text<<EOF"
-            echo "*Open PRs Across the Organization*"
+            echo "*Open PRs Across the Organization (Grouped by Author)*"
             echo
             cat message.txt
             echo "EOF"

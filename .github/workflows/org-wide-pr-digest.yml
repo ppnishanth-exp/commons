@@ -1,8 +1,8 @@
-name: Org-Wide PR Digest (gh search optimized)
+name: Org-Wide PR Digest (Channel Post)
 
 on:
   schedule:
-    - cron: "*/5 * * * *"   # Every weekday at 9 AM MST
+    - cron: "*/5 * * * *"   # Every 5 minutes (adjust as needed)
   workflow_dispatch:
 
 jobs:
@@ -31,75 +31,42 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Fetch ALL Slack users (1 call)
-        id: slack
-        env:
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+      - name: Build Slack message for channel
+        id: build
         run: |
-          slack_users=$(curl -s -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
-            https://slack.com/api/users.list)
+          prs='${{ steps.prs.outputs.all_prs }}'
+
+          # Build a single Slack message summarizing all PRs
+          jq -r '
+            if length == 0 then
+              "No open PRs across the organization."
+            else
+              map(
+                "- *#\(.number)* \(.title)\n  \(.url)"
+              )
+              | join("\n")
+            end
+          ' <<< "$prs" > message.txt
 
           {
-            echo "slack_users<<EOF"
-            echo "$slack_users"
+            echo "text<<EOF"
+            echo "*Open PRs Across the Organization*"
+            echo
+            cat message.txt
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Process + Send Slack DMs (Workaround #2)
+      - name: Post PR digest to Slack channel
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: "C0ABG89R3J6"
         run: |
-          prs='${{ steps.prs.outputs.all_prs }}'
-          slack='${{ steps.slack.outputs.slack_users }}'
+          text='${{ steps.build.outputs.text }}'
 
-          echo "📥 Building Slack user cache..."
-          echo "$slack" | jq -r '.members[] | "\(.name) \(.id)"' > slack_cache.txt
-          echo "$slack" | jq -r '.members[] | "\(.profile.display_name) \(.id)"' >> slack_cache.txt
-          echo "$slack" | jq -r '.members[] | "\(.profile.real_name) \(.id)"' >> slack_cache.txt
+          echo "📨 Sending PR digest to Slack channel $SLACK_CHANNEL_ID"
 
-          get_slack_id() {
-            grep -i "^$1 " slack_cache.txt | awk '{print $2}' | head -n 1
-          }
-
-          get_slack_username() { 
-            echo "$1" | sed 's/_comcast//'
-          }
-
-          echo "📦 Grouping PRs by author (raw GitHub data)..."
-          echo "$prs" | jq '
-            map(select(.author != null)) |
-            group_by(.author.login) |
-            map({key: .[0].author.login, value: .}) |
-            from_entries
-          ' > grouped.json
-
-          now=$(date +%s)
-
-          for author in $(jq -r 'keys[]' grouped.json); do
-            echo "🔍 Processing author: $author"
-
-            slack_username=$(get_slack_username "$author")
-            slack_id=$(get_slack_id "$author")
-            [ -z "$slack_id" ] && continue
-
-            # Workaround #2: jq builds the entire Slack message
-            jq -r --arg a "$author" --argjson now "$now" '
-              .[$a]
-              | sort_by(.createdAt)
-              | map(
-                  "- *#\(.number)* \(.title) (" +
-                  (((($now - (.createdAt | fromdate)) / 86400) | floor) | tostring) +
-                  "d)\n  \(.url)"
-                )
-              | join("\n")
-            ' grouped.json > message.txt
-
-            text="*Your Open PRs Across the Organization*\n$(cat message.txt)"
-
-            echo "📨 Sending DM to $author ($slack_id)"
-            curl -s -X POST \
-              -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
-              -H "Content-type: application/json" \
-              --data "{\"channel\":\"$slack_id\",\"text\":\"$text\"}" \
-              https://slack.com/api/chat.postMessage
-          done
+          curl -s -X POST \
+            -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
+            -H "Content-type: application/json" \
+            --data "{\"channel\":\"$SLACK_CHANNEL_ID\",\"text\":\"$text\"}" \
+            https://slack.com/api/chat.postMessage

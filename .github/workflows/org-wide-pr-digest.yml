@@ -2,7 +2,7 @@ name: Org-Wide PR Digest (Channel Post)
 
 on:
   schedule:
-    - cron: "*/5 * * * *"   # Every 5 minutes (adjust as needed)
+    - cron: "*/5 * * * *"   # Adjust as needed
   workflow_dispatch:
 
 jobs:
@@ -31,37 +31,25 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Build Slack message grouped by author
+      - name: Build Slack message (flat list)
         id: build
         run: |
           prs='${{ steps.prs.outputs.all_prs }}'
-
-          # Flatten in case gh output is wrapped in an extra array
-          prs=$(jq -c 'flatten' <<< "$prs")
 
           jq -r '
             if length == 0 then
               "No open PRs across the organization."
             else
-              group_by(.author.login)
-              | sort_by(.[0].author.login)
-              | map(
-                  "*Author: @\([0].author.login)*\n"
-                  +
-                  (
-                    map(
-                      "- *#\(.number)* \(.title)\n  \(.url)"
-                    )
-                    | join("\n")
-                  )
-                )
-              | join("\n\n")
+              map(
+                "- *#\(.number)* \(.title) (by @\(.author.login))\n  \(.url)"
+              )
+              | join("\n")
             end
           ' <<< "$prs" > message.txt
 
           {
             echo "text<<EOF"
-            echo "*Open PRs Across the Organization (Grouped by Author)*"
+            echo "*Open PRs Across the Organization*"
             echo
             cat message.txt
             echo "EOF"

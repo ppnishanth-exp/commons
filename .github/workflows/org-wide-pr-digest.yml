@@ -36,6 +36,9 @@ jobs:
         run: |
           prs='${{ steps.prs.outputs.all_prs }}'
 
+          # Flatten in case gh output is wrapped in an extra array
+          prs=$(jq -c 'flatten' <<< "$prs")
+
           jq -r '
             if length == 0 then
               "No open PRs across the organization."
